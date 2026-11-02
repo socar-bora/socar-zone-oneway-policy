@@ -3091,7 +3091,6 @@ function applyDefaultView(done) {
   policyFit = { gap, ok, fitsAtAll, far: !!b.far, side: S.mode === 'zone' ? '쏘카존' : '배달 위치' };
   const c = ok ? fit : fitCamera(a);
   flyTo(c.cx, c.cy, c.single ? Math.max(S.z, 1) : c.z, () => { policyPending = false; markQueryView(); if (done) done(); });
-  if (!ok) setTimeout(() => topSnack(b.far ? `반납 위치가 멀어서 ${policyFit.side}부터 보여드려요.` : `한 화면에 담기엔 멀어서 ${policyFit.side}부터 보여드려요.`, 'info', 3600), 900);
   renderPolicyStatus();
 }
 /* 카메라·시트가 바뀔 때마다: 어느 쪽이 화면 밖인지 보고 버튼을 정한다. 둘 다 안 보이면 목록 쪽 우선 */
