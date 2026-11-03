@@ -859,6 +859,18 @@ body.is-narrow .proto-opt .proto-opt__reset{width:28px;padding:4px 7px;font-size
 .app.is-mobile .mapmove__icon{width:24px;height:24px}
 .app.is-mobile .map.has-mapmove .map__notes{opacity:0}
 .ml--far{font-size:calc(16px / var(--z,1));font-weight:700;fill:#8B93A1;letter-spacing:calc(2px / var(--z,1))}
+/* 먼 거리 핏(서울 ↔ 부산): 지도 라벨은 숨기고 도시 이름만 */
+#mapSvg.is-far .ml{display:none}
+.farlabel{position:absolute;transform:translate(-50%,28px);font-size:13px;font-weight:700;line-height:18px;letter-spacing:1px;color:#8B93A1;white-space:nowrap;opacity:0;transition:opacity .2s;pointer-events:none}
+.overlay.is-far .farlabel{opacity:1}
+.farlabel--city{transform:translate(-50%,-50%);font-weight:600;color:#A9B0BB}
+/* 쏘카존 클러스터: 화면에서 핀이 겹칠 만큼 가까운 존들을 하나의 묶음 마커로 (지도 SDK 클러스터링과 같은 역할) */
+.zcluster{position:absolute;display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 11px;border-radius:999px;background:#0078FF;color:#fff;font-size:12px;font-weight:600;line-height:18px;white-space:nowrap;box-shadow:0 0 0 2px #fff,0 3px 10px rgba(0,105,255,.35);transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer;z-index:2;animation:zcluster-in .2s cubic-bezier(.2,.7,.2,1)}
+.zcluster b{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:#fff;color:#0069FF;font-size:12px;font-weight:700}
+.zcluster:hover{background:#0069FF}
+.zcluster:focus-visible{outline-color:#fff;outline-offset:3px}
+.zpin.is-clustered{display:none}
+@keyframes zcluster-in{from{opacity:0;transform:translate(-50%,-50%) scale(.8)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
 /* 프로토 옵션 2단 — 지도를 가리지 않게 아래 공간을 비워둬요 */
 :root{--proto-h:104px}
 .stage{height:calc(100% - var(--proto-h))}
@@ -978,6 +990,7 @@ body.is-narrow .proto-opt.proto-opt--policy .proto-opt__label,body.is-narrow .pr
           <div class="overlay" id="overlay">
             <div class="overlay__layer" id="poiLayer" aria-hidden="true"></div>
             <div class="overlay__layer" id="zoneLayer"></div>
+            <div class="overlay__layer" id="clusterLayer"></div>
             <div class="overlay__layer" id="pinLayer"></div>
           </div>
         </div>
@@ -1023,8 +1036,12 @@ body.is-narrow .proto-opt.proto-opt--policy .proto-opt__label,body.is-narrow .pr
 <div class="proto-opt proto-opt--policy" role="group" aria-label="편도 지도 정책 테스트">
   <span class="proto-opt__label">편도 예시</span>
   <button type="button" data-policy-example="itaewon" title="가까운 반납 · 두 쪽이 한 화면에 들어옴">이태원역 반납</button>
-  <button type="button" data-policy-example="busan" title="먼 반납 · 325km · 한 화면 불가">부산역 반납</button>
+  <button type="button" data-policy-example="busan" title="먼 반납 · 325km · 2안에선 멀어도 한 화면에 핏, 쏘카존은 클러스터로 묶임">부산역 반납</button>
   <button type="button" data-policy-example="delivery" title="배달 + 다른 곳에 반납">배달 편도</button>
+  <span class="proto-opt__sep"></span>
+  <span class="proto-opt__label">기본 뷰</span>
+  <button type="button" data-policy-alt="0" aria-pressed="true" title="최종 결정(11/3): 거리와 무관하게 쏘카존 ↔ 반납을 항상 한 화면에">2안 · 항상 핏</button>
+  <button type="button" data-policy-alt="1" aria-pressed="false" title="구현이 어려울 때의 대안: 핀이 겹칠 만큼 멀면(간격 < 44px) 쏘카존부터 보여주고 [반납 위치 보기] 버튼을 띄움">1안 · 먼 거리는 쏘카존부터</button>
   <span class="proto-opt__sep"></span>
   <span class="proto-opt__status" id="policyStatus" role="status">반납 위치를 정하면 기본 뷰를 판정해요</span>
 </div>
@@ -1417,7 +1434,8 @@ function clearZoneOneWay() {
 const vpEl = $('#viewport'), svgEl = $('#mapSvg'), overlayEl = $('#overlay');
 let VW = 0, VH = 0;
 const measure = () => { VW = vpEl.clientWidth; VH = vpEl.clientHeight; };
-const minZoom = () => isMobile() ? 0.05 : Z_MIN;
+const Z_MIN_FAR = 0.05, Z_MIN_FAR_MOBILE = 0.02, Z_FAR = 0.3;   // 먼 곳 반납 중 최소 배율(PC/MO) · 이 밑으론 도시 이름만 표시
+const minZoom = () => farActive() ? (isMobile() ? Z_MIN_FAR_MOBILE : Z_MIN_FAR) : (isMobile() ? 0.05 : Z_MIN);
 const clampZ = z => Math.min(Z_MAX, Math.max(minZoom(), z));
 const visH = () => Math.max(80, VH - S.padB);
 function clampCenter(x, y, z) {
@@ -1436,6 +1454,7 @@ function applyView() {
   svgEl.setAttribute('viewBox', `${(S.cx - vw / 2).toFixed(2)} ${(S.cy - visH() / 2 / S.z).toFixed(2)} ${vw.toFixed(2)} ${vh.toFixed(2)}`);
   $('#map').style.setProperty('--pad-b', S.padB + 'px');
   svgEl.style.setProperty('--z', S.z.toFixed(4));
+  svgEl.classList.toggle('is-far', S.z < Z_FAR);
   placeOverlays();
 }
 function placeOverlays() {
@@ -1444,7 +1463,8 @@ function placeOverlays() {
     el.style.left = sx.toFixed(1) + 'px'; el.style.top = sy.toFixed(1) + 'px';
   }
   overlayEl.classList.toggle('show-poi', S.z >= Z_POI);
-  syncMapMoveArrow();
+  overlayEl.classList.toggle('is-far', S.z < Z_FAR);
+  syncZoneClusters(); syncMapMoveArrow();
   $('#zoomIn').disabled = S.z >= Z_MAX - 1e-3;
   $('#zoomOut').disabled = S.z <= minZoom() + 1e-3;
 }
@@ -3037,7 +3057,9 @@ function drawMap() {
     // 부산 패치: 중앙대로(남북) · 경부선 철도 · 항만 도로
     line(['M9420 700L9420 1620'], 18, '#EDCB80') + line(['M9420 700L9420 1620'], 14, '#FCE4A3') +
     line(['M8880 1180L9480 1180', 'M8880 980L9380 980', 'M9140 700L9140 1620'], 11, '#E1E2E6') + line(['M8880 1180L9480 1180', 'M8880 980L9380 980', 'M9140 700L9140 1620'], 8, '#FFFFFF') +
-    line(['M9470 700C9472 900 9474 1040 9462 1150'], 6, '#C9CDD5') + line(['M9470 700C9472 900 9474 1040 9462 1150'], 2.5, '#FFFFFF', ' stroke-dasharray="10 10"');
+    line(['M9470 700C9472 900 9474 1040 9462 1150'], 6, '#C9CDD5') + line(['M9470 700C9472 900 9474 1040 9462 1150'], 2.5, '#FFFFFF', ' stroke-dasharray="10 10"') +
+    // 서울 ↔ 부산 사이 스키매틱 고속도로 (먼 거리 핏에서 한 장의 지도로 읽히게)
+    line(['M2400 1010C3400 1060 4200 1400 5200 1300C6300 1190 7200 1000 8880 1180'], 44, '#EDCB80') + line(['M2400 1010C3400 1060 4200 1400 5200 1300C6300 1190 7200 1000 8880 1180'], 32, '#FCE4A3');
   let t = '';
   for (const s of STATIONS) t += `<circle cx="${s.x}" cy="${s.y}" r="6" fill="#fff" stroke="#4A5667" stroke-width="2.5"/><text class="ml ml--stn" x="${s.x + s.dx}" y="${s.y + s.dy}" text-anchor="${s.a}">${s.n}</text>`;
   for (const l of LABELS) t += `<text class="ml ml--${l.k}" x="${l.x}" y="${l.y}" text-anchor="middle">${l.t}</text>`;
@@ -3050,20 +3072,25 @@ function drawMap() {
   for (const el of $$('#mParks > *, #mRiver, #mIsland, #mFarSea')) {
     const c = el.cloneNode(false); c.removeAttribute('id'); c.setAttribute('fill', 'url(#noSvcHatch)'); ns.appendChild(c);
   }
-  $('#poiLayer').innerHTML = POIS.concat(FAR_PLACES).map(p => `<span class="poi" data-wx="${p.x}" data-wy="${p.y}">${esc(p.name)}</span>`).join('');
+  $('#poiLayer').innerHTML = POIS.concat(FAR_PLACES).map(p => `<span class="poi" data-wx="${p.x}" data-wy="${p.y}">${esc(p.name)}</span>`).join('') +
+    // 먼 거리 핏에서만 보이는 도시 이름 (쏘카존 묶음 아래 · 반납 핀 아래)
+    `<span class="farlabel" data-wx="1236" data-wy="707">서울</span><span class="farlabel" data-wx="9420" data-wy="1180">부산</span>` +
+    `<span class="farlabel farlabel--city" data-wx="4700" data-wy="1480">대전</span><span class="farlabel farlabel--city" data-wx="7300" data-wy="930">대구</span>`;
 }
 
-/* ── 편도 지도 UX 정책 (최종) ──
-   · 지도는 항상 "목록의 존이 보이는 곳"을 우선한다 — 카메라가 목록을 바꾸지 않는다.
-   · 반납지 확정 후 지도 기본 뷰: 목록 쪽(쏘카존 클러스터 | 배달 위치) ↔ 반납 위치
-   · 한쪽이 화면 밖으로 나가면(확대·이동) 지도 이동 버튼 노출: 반납 위치 보기 / 쏘카존 위치 보기 / 배달 위치 보기
-   보완: 핏했을 때 핀이 서로 식별되지 않을 만큼(간격 < PIN_GAP) 줌아웃해야 하면, 기본 뷰를 목록 쪽에서 시작한다 → 버튼이 바로 노출됨 */
-const PIN_GAP = 44;                      // 핀 폭(36) + 여유. 이 간격 밑으로는 핀이 겹쳐 보여 '식별 가능한 수준'이 아님
+/* ── 편도 지도 UX 정책 (최종 · 2026-11-03 스노이·보라 합의) ──
+   · 지도는 항상 "목록의 존이 보이는 곳"을 우선한다 — 카메라가 목록을 바꾸지 않는다(목록 변경은 대여 위치 검색뿐).
+   · 반납지 확정 후 지도 기본 뷰: 목록 쪽(쏘카존 클러스터 | 배달 위치) ↔ 반납 위치를 항상 한 화면에 핏 — 거리와 무관(서울 ↔ 부산도 동일). [2안]
+     멀어서 존 핀이 겹치면 지도 SDK 클러스터링처럼 묶음 마커로 표시한다.
+   · 한쪽이 화면 밖으로 나가면(확대·이동) 지도 이동 버튼 노출: 반납 위치 보기 / 쏘카존 위치 보기 / 배달 위치 보기. 둘 다 밖이면 목록 쪽 우선.
+   · [1안 · 대안] 구현이 어려울 때만: 핏했을 때 핀 간격이 PIN_GAP 밑으로 떨어지면 목록 쪽에서 시작하고 [반납 위치 보기] 버튼을 바로 띄운다. */
+const PIN_GAP = 44;                      // (1안 판정 기준) 핀 폭(36) + 여유. 이 간격 밑으로는 핀이 겹쳐 보여 '식별 가능한 수준'이 아님
+let policyAlt = false;                   // true = 1안(대안) 미리보기
 let mapMove = null, policyFit = null;    // 노출 중인 버튼 종류('ret'|'zone'|'del'|null) · 마지막 기본 뷰 판정(상태 표시용)
 let policyPending = false;               // 확정 직후 기본 뷰로 날아가는 동안엔 버튼을 판정하지 않음 (잠깐 떴다 사라지는 것 방지)
 const ARROW_LEFT = `<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="${P.back}"/></svg>`;
 const MOVE_LABEL = { ret: '반납 위치 보기', zone: '쏘카존 위치 보기', del: '배달 위치 보기' };
-const farActive = () => S.mode === 'zone' && S.zoneOneWay.on && !!(S.zoneOneWay.ret.pt && S.zoneOneWay.ret.pt.far);
+function farActive() { return S.mode === 'zone' && S.zoneOneWay.on && !!(S.zoneOneWay.ret.pt && S.zoneOneWay.ret.pt.far); }   // 선언식: minZoom()이 먼저 정의돼 있어도 호출 가능
 const listZones = () => { const g = S.zoneOneWay.groups.map(x => x.z); return g.length ? g : ZONES.filter(z => S.zoneOneWay.queriedIds.includes(z.id)); };
 const tripReady = () => (S.mode === 'zone' && zoneTripReady()) || (S.mode === 'delivery' && resultsReady() && dual());
 const centroid = pts => pts.length ? { x: pts.reduce((n, p) => n + p.x, 0) / pts.length, y: pts.reduce((n, p) => n + p.y, 0) / pts.length } : null;
@@ -3083,15 +3110,44 @@ const minPinGap = (pts, z) => { let m = Infinity; for (let i = 0; i < pts.length
 const liveVisH = () => (isMobile() ? Math.max(80, VH - sheetVis) : visH());   // 시트를 끄는 중에도 실제로 보이는 지도 높이
 const onScreen = (p, pad = 20) => { const [sx, sy] = toScreen(p.x, p.y); return sx >= pad && sx <= VW - pad && sy >= pad + 48 && sy <= liveVisH() - pad; };
 const markQueryView = () => { if (S.mode === 'zone') S.zoneOneWay.queryView = { cx: S.cx, cy: S.cy, z: S.z }; updateResearch(); };
-/* 기본 뷰: 두 쪽을 한 화면에. 핀 식별 배율보다 작아져야 하면 목록 쪽에서 시작(보완) */
+/* 기본 뷰: 두 쪽을 항상 한 화면에(2안). 1안(대안)일 때만 핀 식별 배율보다 작아져야 하면 목록 쪽에서 시작 */
 function applyDefaultView(done) {
   const { a, b } = tripSides(); if (!b || !a.length) { policyPending = false; syncMapMove(); if (done) done(); return; }
   const pts = [...a, b], fit = fitCamera(pts);
-  const gap = minPinGap(pts, fit.z), fitsAtAll = fit.raw >= minZoom() - 1e-6, ok = fitsAtAll && gap >= PIN_GAP;
+  const gap = minPinGap(pts, fit.z), fitsAtAll = fit.raw >= minZoom() - 1e-6, ok = !policyAlt || (fitsAtAll && gap >= PIN_GAP);
   policyFit = { gap, ok, fitsAtAll, far: !!b.far, side: S.mode === 'zone' ? '쏘카존' : '배달 위치' };
   const c = ok ? fit : fitCamera(a);
-  flyTo(c.cx, c.cy, c.single ? Math.max(S.z, 1) : c.z, () => { policyPending = false; markQueryView(); if (done) done(); });
+  flyTo(c.cx, c.cy, c.single ? Math.max(S.z, 1) : c.z, () => { policyPending = false; markQueryView(); renderPolicyStatus(); if (done) done(); });
   renderPolicyStatus();
+}
+/* ── 쏘카존 클러스터: 화면에서 간격이 PIN_GAP 미만인 존 핀을 묶음 마커로 (멀리 줌아웃해도 "쏘카존 N" 으로 읽히게) ── */
+let clusterSig = '';
+function syncZoneClusters() {
+  const layer = $('#clusterLayer'); if (!layer) return;
+  const pins = S.mode === 'zone' ? $$('#zoneLayer .zpin') : [];
+  const pts = pins.map(el => { const [sx, sy] = toScreen(+el.dataset.wx, +el.dataset.wy); return { el, sx, sy }; });
+  const groups = [];
+  for (const p of pts) {
+    let g = groups.find(gr => gr.some(m => Math.hypot(m.sx - p.sx, m.sy - p.sy) < PIN_GAP));
+    if (!g) { g = []; groups.push(g); }
+    g.push(p);
+  }
+  const clusters = groups.filter(g => g.length > 1);
+  const sig = clusters.map(g => g.map(m => m.el.dataset.zpin).join(',')).join('|');
+  pins.forEach(p => p.classList.toggle('is-clustered', clusters.some(g => g.some(m => m.el === p))));   // 핀은 매번 다시 그려질 수 있어 항상 동기화
+  if (sig !== clusterSig) {
+    clusterSig = sig;
+    layer.innerHTML = clusters.map(g => `<button type="button" class="zcluster" data-ids="${g.map(m => m.el.dataset.zpin).join(',')}" aria-label="쏘카존 ${g.length}곳 묶음. 누르면 확대돼요">쏘카존 <b>${g.length}</b></button>`).join('');
+  }
+  $$('.zcluster', layer).forEach((el, i) => {
+    const g = clusters[i]; if (!g) return;
+    el.style.left = (g.reduce((n, m) => n + m.sx, 0) / g.length).toFixed(1) + 'px';
+    el.style.top = (g.reduce((n, m) => n + m.sy, 0) / g.length).toFixed(1) + 'px';
+  });
+}
+function clusterZoomIn(ids) {
+  const zs = ZONES.filter(z => ids.includes(z.id)); if (!zs.length) return;
+  const c = fitCamera(zs); flyTo(c.cx, c.cy, Math.max(c.z, Math.min(S.z * 3, Z_FIT)), markQueryView);
 }
 /* 카메라·시트가 바뀔 때마다: 어느 쪽이 화면 밖인지 보고 버튼을 정한다. 둘 다 안 보이면 목록 쪽 우선 */
 function syncMapMove() {
@@ -3136,9 +3192,17 @@ function renderPolicyStatus() {
   const el = $('#policyStatus'); if (!el) return;
   if (!tripReady() || !policyFit) { el.textContent = '반납 위치를 정하면 기본 뷰를 판정해요'; el.dataset.branch = ''; return; }
   const gap = Number.isFinite(policyFit.gap) ? Math.round(policyFit.gap) : null;
-  const base = policyFit.ok ? `기본 뷰: 한 화면 핏 (핀 간격 ${gap}px ≥ ${PIN_GAP}px)` : !policyFit.fitsAtAll ? `기본 뷰: ${policyFit.side}부터 (한 화면 불가)` : `기본 뷰: ${policyFit.side}부터 (핀 간격 ${gap}px < ${PIN_GAP}px)`;
+  const clustered = $$('#clusterLayer .zcluster').length;
+  const base = !policyAlt
+    ? `기본 뷰: 한 화면 핏 (2안 · 거리 무관${policyFit.far ? ' · 325km' : ''})${clustered ? ' · 쏘카존 클러스터' : ''}`
+    : policyFit.ok ? `기본 뷰: 한 화면 핏 (1안 · 핀 간격 ${gap}px ≥ ${PIN_GAP}px)` : `기본 뷰: ${policyFit.side}부터 (1안 · 핀 간격 ${gap}px < ${PIN_GAP}px)`;
   el.textContent = base + (mapMove ? ` · 버튼: ${MOVE_LABEL[mapMove]}` : ' · 버튼 없음');
   el.dataset.branch = policyFit.ok ? 'fit' : 'split';
+}
+function setPolicyAlt(on) {
+  policyAlt = !!on;
+  $$('[data-policy-alt]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.policyAlt === '1') === policyAlt)));
+  if (tripReady() && !canMapEdit()) { policyPending = true; applyDefaultView(); } else renderPolicyStatus();
 }
 function policyExample(id) {
   if (detailState) closeCarDetail(false);
@@ -3162,7 +3226,9 @@ function policyExample(id) {
 }
 function bindPolicy() {
   $$('[data-policy-example]').forEach(b => b.addEventListener('click', () => policyExample(b.dataset.policyExample)));
+  $$('[data-policy-alt]').forEach(b => b.addEventListener('click', () => setPolicyAlt(b.dataset.policyAlt === '1')));
   $('#mapMove').addEventListener('click', mapMoveGo);
+  $('#clusterLayer').addEventListener('click', e => { const b = e.target.closest('.zcluster'); if (b) clusterZoomIn(b.dataset.ids.split(',')); });
 }
 
 /* ── 지도 끌기 (핀이 아닌 곳) ── */
